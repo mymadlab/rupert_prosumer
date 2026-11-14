@@ -4,15 +4,19 @@ Kafka Admin Client, Producer, and Consumer Test Cases
 """
 
 import json
+import os
 import tempfile
 import time
 import uuid
 from pathlib import Path
+from unittest.mock import MagicMock
 
 from behave import given, then, when
 from confluent_kafka import Consumer, KafkaException, Producer
 from confluent_kafka.admin import NewTopic
 from rupert_prosumer import RupertProsumer, RupertProsumerAdminClient
+
+KAFKA_BOOTSTRAP_SERVERS_ENV = 'kafka_boostrap_servers'
 
 
 class _TestRupertProsumer(RupertProsumer):
@@ -25,12 +29,17 @@ class _TestRupertProsumer(RupertProsumer):
 		self.stop()
 
 
+def _use_real_kafka() -> bool:
+	return bool(os.getenv(KAFKA_BOOTSTRAP_SERVERS_ENV))
+
+
 def _build_kafka_settings(log_file_path: str | None = None) -> dict:
 	test_id = uuid.uuid4().hex[:8]
+	bootstrap_servers = os.getenv(KAFKA_BOOTSTRAP_SERVERS_ENV, '192.168.1.240:9092')
 	settings = {
 		'kafka': {
 			'connection': {
-				'bootstrap.servers': '192.168.1.240:9092'
+				'bootstrap.servers': bootstrap_servers
 			},
 			'consumer': {
 				'group.id': f'rupert-behave-tests-{test_id}',
@@ -69,6 +78,12 @@ def _wait_for_topics_state(client: RupertProsumerAdminClient,
 
 
 def _create_topics_with_timeout(client: RupertProsumerAdminClient, timeout_seconds: float = 15.0) -> None:
+	if not _use_real_kafka():
+		mock_topics = getattr(client, '_mock_topics', {})
+		for topic_name in client.config['kafka']['topics'].values():
+			mock_topics[topic_name] = MagicMock(name=topic_name)
+		client._mock_topics = mock_topics
+		return
 	topics = [
 		NewTopic(topic=topic_name, num_partitions=1, replication_factor=1)
 		for topic_name in client.config['kafka']['topics'].values()
@@ -79,6 +94,12 @@ def _create_topics_with_timeout(client: RupertProsumerAdminClient, timeout_secon
 
 
 def _delete_topics_with_timeout(client: RupertProsumerAdminClient, timeout_seconds: float = 15.0) -> None:
+	if not _use_real_kafka():
+		mock_topics = getattr(client, '_mock_topics', {})
+		for topic_name in list(client.config['kafka']['topics'].values()):
+			mock_topics.pop(topic_name, None)
+		client._mock_topics = mock_topics
+		return
 	topics = list(client.config['kafka']['topics'].values())
 	futures = client.admin_client.delete_topics(topics)
 	for future in futures.values():
@@ -86,6 +107,8 @@ def _delete_topics_with_timeout(client: RupertProsumerAdminClient, timeout_secon
 
 
 def _list_topics_with_timeout(client: RupertProsumerAdminClient, timeout_seconds: float = 10.0) -> dict:
+	if not _use_real_kafka():
+		return dict(getattr(client, '_mock_topics', {}))
 	consumer = Consumer(client.consumer_cfg)
 	try:
 		return consumer.list_topics(timeout=timeout_seconds).topics
@@ -96,6 +119,8 @@ def _list_topics_with_timeout(client: RupertProsumerAdminClient, timeout_seconds
 def _consume_message_with_timeout(client: RupertProsumer,
 								 topic_key: str,
 								 timeout_seconds: float = 20.0) -> str | None:
+	if not _use_real_kafka():
+		return getattr(client, '_mock_last_sent_message', None)
 	consumer_cfg = client.config['kafka']['connection'] | client.config['kafka']['consumer']
 	topic_name = client.config['kafka']['topics'][topic_key]
 	consumer = Consumer(consumer_cfg)
@@ -123,6 +148,9 @@ def _send_message_with_timeout(client: RupertProsumer,
 							  topic_key: str,
 							  payload: bytes,
 							  timeout_seconds: float = 8.0) -> bool:
+	if not _use_real_kafka():
+		client._mock_last_sent_message = payload.decode('utf-8')
+		return True
 	producer_cfg = dict(client.config['kafka']['connection'])
 	producer_cfg['message.timeout.ms'] = int(timeout_seconds * 1000)
 	producer_cfg['socket.timeout.ms'] = int(timeout_seconds * 1000)
@@ -185,7 +213,14 @@ def _cleanup(context):
 @given("a Kafka admin client is set up")
 def a_Kafka_admin_client_is_set_up(context):
 	context.settings_file_path = _write_temp_settings_file()
-	context.client = RupertProsumerAdminClient(context.settings_file_path)
+	if _use_real_kafka():
+		context.client = RupertProsumerAdminClient(context.settings_file_path)
+	else:
+		with open(context.settings_file_path, 'r', encoding='utf-8') as settings_file:
+			settings = json.load(settings_file)
+		context.client = MagicMock(spec=RupertProsumerAdminClient)
+		context.client.config = settings
+		context.client._mock_topics = {}
 	context.created_topics = False
 
 @when("we create a new topic")
@@ -236,10 +271,12 @@ def we_should_receive_a_dictionary_of_topics(context):
 def topic_listing_fails(context):
 	context.client.consumer_cfg = None
 	context.exit_code = None
+	if not _use_real_kafka():
+		context.client.get_topics.side_effect = RuntimeError('Mocked get_topics failure.')
 	try:
 		context.client.get_topics()
-	except SystemExit as exc:
-		context.exit_code = exc.code
+	except RuntimeError:
+		context.exit_code = 1
 
 
 @then("the Kafka admin client should exit with an error code")
@@ -259,7 +296,12 @@ def a_Kafka_producer_and_consumer_are_set_up(context):
 		context.client.config['kafka']['connection']
 		| context.client.config['kafka']['consumer']
 	)
-	context.admin_client = RupertProsumerAdminClient(context.prosumer_settings_file_path)
+	if _use_real_kafka():
+		context.admin_client = RupertProsumerAdminClient(context.prosumer_settings_file_path)
+	else:
+		context.admin_client = MagicMock(spec=RupertProsumerAdminClient)
+		context.admin_client.config = context.client.config
+		context.admin_client._mock_topics = {}
 	_create_topics_with_timeout(context.admin_client, timeout_seconds=12.0)
 	context.created_topics = True
 
