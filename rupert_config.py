@@ -17,12 +17,10 @@ class RupertConfig():
 		"""
 			Construct for RupertConfig class
 			Responsible for:
-				1. Locates configuration file if present
-				2. Loads default configurations
-				3. If config is found loads it
+				1. Stores the configuration file path.
+				2. Loads configuration from the provided file.
 		"""
 		self.config_file = config_file
-		self.load(self.config_file)
 		self.config = self.load(self.config_file)
 
 	@beartype
@@ -33,23 +31,10 @@ class RupertConfig():
 				1. Opens the config file
 				2. Loads the settings
 		"""
-		try:
-			with open(config_file, 'r', encoding='utf-8') as cfg:
-				cfg_json = cfg.read()
-			config = json.loads(cfg_json)
-			return config
-		except FileNotFoundError as e:
-			raise e
-		except json.JSONDecodeError as e:
-			raise e
-		except PermissionError as e:
-			raise e
-		except IsADirectoryError as e:
-			raise e
-		except OSError as e:
-			raise e
-		except UnicodeDecodeError as e:
-			raise e
+		with open(config_file, 'r', encoding='utf-8') as cfg:
+			cfg_json = cfg.read()
+		config = json.loads(cfg_json)
+		return config
 
 	@beartype
 	def reload(self) -> None:
