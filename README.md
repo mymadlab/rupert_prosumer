@@ -62,7 +62,11 @@ Create a JSON config file:
   "logging": {
     "rotation": "10 MB",
     "retention": "7 days",
-    "level": "INFO"
+    "level": "INFO",
+    "allow_sensitive_trace_payloads": false,
+    "trace_payload_allowed_fields": {
+      "*": ["event", "event_id", "device_id"]
+    }
   }
 }
 ```
@@ -158,3 +162,5 @@ Important:
 - `send(...)` expects bytes payloads. Use `serialize_to_json(...)` + `.encode("utf-8")` for JSON events.
 - `serialize_to_json(...)` is intended for JSON-serializable dict payloads.
 - `listen(...)` loops until `stop()` is called.
+- `logging.allow_sensitive_trace_payloads` is `false` by default. Set it to `true` only for urgent, short-lived debugging/testing windows.
+- Raw payload trace output is safelisted: configure `logging.trace_payload_allowed_fields` by topic key (or `*`) to control which fields may be logged.
